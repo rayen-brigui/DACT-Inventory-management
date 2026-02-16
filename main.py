@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, simpledialog
+from tkinter import ttk, messagebox, filedialog, simpledialog, PhotoImage
 import sqlite3
 from datetime import datetime
 import csv
@@ -122,6 +122,14 @@ class StockApp(tk.Tk):
         super().__init__()
         self.title("DACT IT Materials Stock Manager")
         self.geometry("1000x600")
+        # Set custom icon from assets folder
+        icon_path = os.path.join(os.path.dirname(__file__), "assets", "logo.png")
+        if os.path.exists(icon_path):
+            try:
+                icon = PhotoImage(file=icon_path)
+                self.iconphoto(False, icon)
+            except Exception as e:
+                print(f"Could not load icon: {e}")
         self.current_user = None
         self.create_widgets()
         self.refresh_lookups()
