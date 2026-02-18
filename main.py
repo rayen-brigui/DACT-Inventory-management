@@ -12,8 +12,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+import customtkinter as ctk
 
 DB_PATH = "inventory.db"
+
+# Configure CustomTkinter appearance
+ctk.set_appearance_mode("System")
+ctk.set_default_color_theme("blue")
 
 # --- Database setup ---
 def init_db():
@@ -117,7 +122,7 @@ def add_log(action, item_id=None, details=None, user_id=None):
              (action, item_id, user_id, details_json, timestamp))
 
 # --- App ---
-class StockApp(tk.Tk):
+class StockApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("DACT IT Materials Stock Manager")
@@ -138,7 +143,7 @@ class StockApp(tk.Tk):
 
     def create_widgets(self):
         # Top: Filters
-        top_frame = ttk.Frame(self)
+        top_frame = ctk.CTkFrame(self)
         top_frame.pack(fill="x", padx=8, pady=6)
 
         ttk.Label(top_frame, text="Search:").pack(side="left")
@@ -172,24 +177,27 @@ class StockApp(tk.Tk):
         self.date_to = tk.StringVar()
         ttk.Entry(top_frame, textvariable=self.date_to, width=12).pack(side="left", padx=4)
 
-        ttk.Button(top_frame, text="Apply Filters", command=self.load_items).pack(side="left", padx=8)
-        ttk.Button(top_frame, text="Clear Filters", command=self.clear_filters).pack(side="left")
+        ctk.CTkButton(top_frame, text="Apply Filters", command=self.load_items).pack(side="left", padx=8)
+        ctk.CTkButton(top_frame, text="Clear Filters", command=self.clear_filters).pack(side="left")
 
         # User management button (only enabled for admins after login)
-        self.user_mgmt_btn = ttk.Button(top_frame, text="Users", command=self.open_user_mgmt)
+        self.user_mgmt_btn = ctk.CTkButton(top_frame, text="Users", command=self.open_user_mgmt)
         self.user_mgmt_btn.pack(side="right", padx=(4,0))
-        self.user_mgmt_btn.state(['disabled'])
+        try:
+            self.user_mgmt_btn.configure(state="disabled")
+        except Exception:
+            pass
 
         # Audit Log button
-        self.audit_log_btn = ttk.Button(top_frame, text="Audit Log", command=self.open_audit_log)
+        self.audit_log_btn = ctk.CTkButton(top_frame, text="Audit Log", command=self.open_audit_log)
         self.audit_log_btn.pack(side="right")
 
         # Reports button
-        self.reports_btn = ttk.Button(top_frame, text="Reports", command=self.open_reports)
+        self.reports_btn = ctk.CTkButton(top_frame, text="Reports", command=self.open_reports)
         self.reports_btn.pack(side="right", padx=(4,0))
 
         # Main: Left form, center treeview, right logs
-        main_frame = ttk.Frame(self)
+        main_frame = ctk.CTkFrame(self)
         main_frame.pack(fill="both", expand=True, padx=8, pady=6)
 
         # Form
@@ -202,7 +210,7 @@ class StockApp(tk.Tk):
         cat_frame.grid(row=0, column=1, pady=4, sticky="w")
         self.form_category_cb = ttk.Combobox(cat_frame, textvariable=self.form_category_var, state="readonly", width=26)
         self.form_category_cb.pack(side="left")
-        ttk.Button(cat_frame, text="+", width=2, command=self.add_category_prompt).pack(side="left", padx=(4,0))
+        ctk.CTkButton(cat_frame, text="+", width=24, command=self.add_category_prompt).pack(side="left", padx=(4,0))
 
         ttk.Label(form, text="Department:").grid(row=1, column=0, sticky="e")
         self.form_department_var = tk.StringVar()
@@ -210,7 +218,7 @@ class StockApp(tk.Tk):
         dep_frame.grid(row=1, column=1, pady=4, sticky="w")
         self.form_department_cb = ttk.Combobox(dep_frame, textvariable=self.form_department_var, state="readonly", width=26)
         self.form_department_cb.pack(side="left")
-        ttk.Button(dep_frame, text="+", width=2, command=self.add_department_prompt).pack(side="left", padx=(4,0))
+        ctk.CTkButton(dep_frame, text="+", width=24, command=self.add_department_prompt).pack(side="left", padx=(4,0))
 
         ttk.Label(form, text="Quantity:").grid(row=2, column=0, sticky="e")
         self.qty_var = tk.IntVar(value=1)
@@ -222,16 +230,16 @@ class StockApp(tk.Tk):
         loc_frame.grid(row=3, column=1, pady=4, sticky="w")
         self.form_location_cb = ttk.Combobox(loc_frame, textvariable=self.loc_var, state="readonly", width=26)
         self.form_location_cb.pack(side="left")
-        ttk.Button(loc_frame, text="+", width=2, command=self.add_location_prompt).pack(side="left", padx=(4,0))
+        ctk.CTkButton(loc_frame, text="+", width=24, command=self.add_location_prompt).pack(side="left", padx=(4,0))
 
         btn_frame = ttk.Frame(form)
         btn_frame.grid(row=4, column=0, columnspan=2, pady=6)
-        ttk.Button(btn_frame, text="Add", command=self.add_item).pack(side="left", padx=4)
-        ttk.Button(btn_frame, text="Update", command=self.update_item).pack(side="left", padx=4)
-        ttk.Button(btn_frame, text="Add Stock", command=self.add_stock).pack(side="left", padx=4)
-        ttk.Button(btn_frame, text="Retrieve", command=self.retrieve_asset).pack(side="left", padx=4)
-        ttk.Button(btn_frame, text="Delete", command=self.delete_item).pack(side="left", padx=4)
-        ttk.Button(btn_frame, text="Export CSV", command=self.export_csv).pack(side="left", padx=4)
+        ctk.CTkButton(btn_frame, text="Add", command=self.add_item).pack(side="left", padx=4)
+        ctk.CTkButton(btn_frame, text="Update", command=self.update_item).pack(side="left", padx=4)
+        ctk.CTkButton(btn_frame, text="Add Stock", command=self.add_stock).pack(side="left", padx=4)
+        ctk.CTkButton(btn_frame, text="Retrieve", command=self.retrieve_asset).pack(side="left", padx=4)
+        ctk.CTkButton(btn_frame, text="Delete", command=self.delete_item).pack(side="left", padx=4)
+        ctk.CTkButton(btn_frame, text="Export CSV", command=self.export_csv).pack(side="left", padx=4)
 
         # Items Treeview
         center = ttk.Frame(main_frame)
@@ -254,7 +262,7 @@ class StockApp(tk.Tk):
             self.log_tree.heading(col, text=col.title())
             self.log_tree.column(col, anchor="w", width=100)
         self.log_tree.pack(fill="both", expand=True, padx=4, pady=4)
-        ttk.Button(log_frame, text="Refresh Logs", command=self.load_logs).pack(pady=(0,6))
+        ctk.CTkButton(log_frame, text="Refresh Logs", command=self.load_logs).pack(pady=(0,6))
 
     def clear_filters(self):
         self.search_var.set("")
@@ -409,7 +417,7 @@ class StockApp(tk.Tk):
         cnt = query_db("SELECT COUNT(*) FROM users", fetch=True)[0][0]
         if cnt == 0:
             # create initial admin
-            dlg = tk.Toplevel(self)
+            dlg = ctk.CTkToplevel(self)
             dlg.title("Create initial admin")
             dlg.grab_set()
             ttk.Label(dlg, text="No users found. Create initial admin account").pack(padx=12, pady=(12,4))
@@ -428,13 +436,13 @@ class StockApp(tk.Tk):
                     return
                 messagebox.showinfo("Created", "Initial admin created. Please login.")
                 dlg.destroy()
-            ttk.Button(dlg, text="Create", command=create_admin).pack(pady=8)
+            ctk.CTkButton(dlg, text="Create", command=create_admin).pack(pady=8)
             dlg.transient(self)
             self.wait_window(dlg)
 
         # Login dialog
         logged_in = {'ok': False}
-        dlg = tk.Toplevel(self)
+        dlg = ctk.CTkToplevel(self)
         dlg.title("Login")
         dlg.grab_set()
         ttk.Label(dlg, text="Username:").grid(row=0, column=0, padx=8, pady=(8,4), sticky="e")
@@ -443,7 +451,8 @@ class StockApp(tk.Tk):
         ttk.Label(dlg, text="Password:").grid(row=1, column=0, padx=8, pady=4, sticky="e")
         pvar = tk.StringVar()
         ttk.Entry(dlg, textvariable=pvar, show="*").grid(row=1, column=1, padx=8, pady=4)
-
+        ctk.CTkButton(dlg, text="Login", command=lambda: do_login()).grid(row=2, column=0, pady=8)
+        ctk.CTkButton(dlg, text="Quit", command=lambda: do_quit()).grid(row=2, column=1, pady=8)
         def do_login():
             username = uvar.get().strip()
             pwd = pvar.get()
@@ -462,8 +471,8 @@ class StockApp(tk.Tk):
         def do_quit():
             dlg.destroy()
 
-        ttk.Button(dlg, text="Login", command=do_login).grid(row=2, column=0, pady=8)
-        ttk.Button(dlg, text="Quit", command=do_quit).grid(row=2, column=1, pady=8)
+            ctk.CTkButton(dlg, text="Login", command=do_login).grid(row=2, column=0, pady=8)
+            ctk.CTkButton(dlg, text="Quit", command=do_quit).grid(row=2, column=1, pady=8)
         dlg.transient(self)
         dlg.wait_visibility()
         self.wait_window(dlg)
@@ -473,7 +482,7 @@ class StockApp(tk.Tk):
         # enable admin-only controls
         if self.current_user and self.current_user.get('role') == 'admin':
             try:
-                self.user_mgmt_btn.state(['!disabled'])
+                    self.user_mgmt_btn.configure(state="normal")
             except Exception:
                 pass
         return True
@@ -482,7 +491,7 @@ class StockApp(tk.Tk):
         if not self.current_user or self.current_user.get('role') != 'admin':
             messagebox.showwarning("Permission", "Only admins can manage users")
             return
-        dlg = tk.Toplevel(self)
+        dlg = ctk.CTkToplevel(self)
         dlg.title("User Management")
         dlg.geometry("500x300")
 
@@ -528,14 +537,14 @@ class StockApp(tk.Tk):
 
         btns = ttk.Frame(dlg)
         btns.pack(fill="x", padx=8, pady=(0,8))
-        ttk.Button(btns, text="Add User", command=add_user_prompt).pack(side="left")
-        ttk.Button(btns, text="Delete", command=delete_selected).pack(side="left", padx=8)
-        ttk.Button(btns, text="Close", command=dlg.destroy).pack(side="right")
+        ctk.CTkButton(btns, text="Add User", command=add_user_prompt).pack(side="left")
+        ctk.CTkButton(btns, text="Delete", command=delete_selected).pack(side="left", padx=8)
+        ctk.CTkButton(btns, text="Close", command=dlg.destroy).pack(side="right")
 
         refresh_users()
 
     def open_audit_log(self):
-        dlg = tk.Toplevel(self)
+        dlg = ctk.CTkToplevel(self)
         dlg.title("Audit Log")
         dlg.geometry("1000x500")
 
@@ -580,13 +589,13 @@ class StockApp(tk.Tk):
         
         btn_frame = ttk.Frame(dlg)
         btn_frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=8)
-        ttk.Button(btn_frame, text="Refresh", command=refresh_audit).pack(side="left")
-        ttk.Button(btn_frame, text="Close", command=dlg.destroy).pack(side="right")
+        ctk.CTkButton(btn_frame, text="Refresh", command=refresh_audit).pack(side="left")
+        ctk.CTkButton(btn_frame, text="Close", command=dlg.destroy).pack(side="right")
 
     def open_reports(self):
-        dlg = tk.Toplevel(self)
+        dlg = ctk.CTkToplevel(self)
         dlg.title("Reports")
-        dlg.geometry("1200x600")
+        dlg.geometry("1200x800")
 
         # Create notebook for tabs
         notebook = ttk.Notebook(dlg)
@@ -787,6 +796,10 @@ class StockApp(tk.Tk):
             return
         item = self.tree.item(sel[0])['values']
         item_id = item[0]
+        item_name = item[1]
+        current_qty = item[3]
+        department = item[2]
+        location = item[4]
         # ask for amount to add
         try:
             amt = simpledialog.askinteger("Add Stock", "Quantity to add:", parent=self, minvalue=1, initialvalue=1)
@@ -797,7 +810,7 @@ class StockApp(tk.Tk):
         comment = simpledialog.askstring("Comment", "Optional comment for this stock addition:", parent=self)
         query_db("UPDATE items SET quantity = quantity + ? WHERE id=?", (amt, item_id))
         user_id = self.current_user['id'] if self.current_user else None
-        add_log("ADD_STOCK", item_id, {"amount": amt, "comment": comment}, user_id)
+        add_log("ADD_STOCK", item_id, {"item": item_name, "amount": amt, "department": department, "location": location, "comment": comment}, user_id)
         self.load_items()
         self.load_logs()
 
@@ -807,10 +820,11 @@ class StockApp(tk.Tk):
             messagebox.showwarning("Select", "Select an item to retrieve")
             return
         item = self.tree.item(sel[0])['values']
-        print("Selected item for retrieval:", item)
         item_id = item[0]
+        item_name = item[1]
         current_qty = item[3]
-        department = item[2]  
+        department = item[2]
+        location = item[4]
 
         try:
             amt = simpledialog.askinteger("Retrieve", "Quantity to retrieve:", parent=self, minvalue=1, initialvalue=1)
@@ -824,7 +838,7 @@ class StockApp(tk.Tk):
         comment = simpledialog.askstring("Comment", "Optional comment for retrieval:", parent=self)
         query_db("UPDATE items SET quantity = quantity - ? WHERE id=?", (amt, item_id))
         user_id = self.current_user['id'] if self.current_user else None
-        add_log("RETRIEVE", item_id, {"amount": amt, "department": department, "comment": comment}, user_id)
+        add_log("RETRIEVE", item_id, {"item": item_name, "amount": amt, "department": department, "location": location, "comment": comment}, user_id)
         self.load_items()
         self.load_logs()
 
