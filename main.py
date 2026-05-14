@@ -8,12 +8,23 @@ import os
 import sys
 import hashlib
 import binascii
+import threading
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import customtkinter as ctk
 import sys, os
+
+# ── SNMP (pysnmp) ──────────────────────────────────────────────────────────────
+try:
+    from pysnmp.hlapi import (
+        getCmd, SnmpEngine, CommunityData, UdpTransportTarget,
+        ContextData, ObjectType, ObjectIdentity
+    )
+    SNMP_AVAILABLE = True
+except ImportError:
+    SNMP_AVAILABLE = False
 def resource_path(rel):
     if getattr(sys, "frozen", False):
         return os.path.join(sys._MEIPASS, rel)
@@ -52,6 +63,21 @@ def init_db():
     if "department" not in cols:
         try: c.execute("ALTER TABLE items ADD COLUMN department TEXT")
         except: pass
+    c.execute("""CREATE TABLE IF NOT EXISTS printers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        ip_address TEXT NOT NULL,
+        community TEXT NOT NULL DEFAULT 'public',
+        bw_oid TEXT NOT NULL DEFAULT '1.3.6.1.2.1.43.10.2.1.4.1.1',
+        color_oid TEXT NOT NULL DEFAULT '1.3.6.1.2.1.43.10.2.1.4.1.2',
+        notes TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS printer_polls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        printer_id INTEGER NOT NULL,
+        polled_at TEXT NOT NULL,
+        bw_count INTEGER,
+        color_count INTEGER,
+        status TEXT)""")
     c.execute("""CREATE TABLE IF NOT EXISTS logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT NOT NULL,
         item_id INTEGER, user_id INTEGER, details TEXT, timestamp TEXT NOT NULL)""")
@@ -586,6 +612,7 @@ class StockApp(ctk.CTk):
             ("🗃",  "Inventory",  lambda: self._show_view("inventory")),
             ("📊",  "Reports",    lambda: self._show_view("reports")),
             ("📋",  "Audit Log",  lambda: self._show_view("audit")),
+            ("🖨",  "Printers",   lambda: self._show_view("printers")),
         ]:
             b = SidebarBtn(sidebar, icon, tip, command=cmd)
             b.pack(pady=2)
@@ -753,6 +780,13 @@ class StockApp(ctk.CTk):
         self._audit_frame.grid_rowconfigure(0, weight=1)
         self._build_audit_view(self._audit_frame)
 
+        # ── Embedded Printers frame ───────────────────────────────────
+        self._printers_frame = ctk.CTkFrame(content, fg_color="transparent")
+        self._printers_frame.grid(row=2, column=0, sticky="nsew", padx=16, pady=14)
+        self._printers_frame.grid_columnconfigure(0, weight=1)
+        self._printers_frame.grid_rowconfigure(0, weight=1)
+        self._build_printers_view(self._printers_frame)
+
         # Show inventory by default
         self._show_view("inventory")
 
@@ -836,6 +870,7 @@ class StockApp(ctk.CTk):
             "inventory": (self._inventory_frame, "Inventory",  "Inventory"),
             "reports":   (self._reports_frame,   "Reports",    "Reports"),
             "audit":     (self._audit_frame,      "Audit Log",  "Audit Log"),
+            "printers":  (self._printers_frame,   "Printer Counters", "Printers"),
         }
         for key, (frame, _, __) in frames.items():
             if key == view:
@@ -1331,6 +1366,345 @@ class StockApp(ctk.CTk):
         ctk.CTkButton(btn_row, text="Close", command=dlg.destroy,
                       fg_color="transparent", border_width=1).pack(side="right")
         refresh()
+
+    # ── Printer Counters (SNMP) ───────────────────────────────────────────────
+    def _build_printers_view(self, parent):
+        parent.grid_rowconfigure(1, weight=1)
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_columnconfigure(1, weight=1)
+
+        if not SNMP_AVAILABLE:
+            ctk.CTkLabel(parent,
+                text="⚠  pysnmp is not installed.\n\nRun:  pip install pysnmp",
+                font=ctk.CTkFont(size=14), text_color=("#E65100","#FF8A65")).grid(
+                row=0, column=0, columnspan=2, pady=60)
+            return
+
+        # ── Toolbar ──────────────────────────────────────────────────────
+        toolbar = ctk.CTkFrame(parent, fg_color="transparent", height=44)
+        toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        toolbar.grid_propagate(False)
+        toolbar.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(toolbar, text="Printer Fleet",
+                     font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, padx=(0,16))
+
+        self._printer_status_var = tk.StringVar(value="")
+        ctk.CTkLabel(toolbar, textvariable=self._printer_status_var,
+                     font=ctk.CTkFont(size=11),
+                     text_color=("gray50","gray60")).grid(row=0, column=1, sticky="w")
+
+        btn_frame = ctk.CTkFrame(toolbar, fg_color="transparent")
+        btn_frame.grid(row=0, column=2)
+
+        ctk.CTkButton(btn_frame, text="+ Add Printer", height=30, width=110,
+                      corner_radius=8, font=ctk.CTkFont(size=11, weight="bold"),
+                      command=self._open_add_printer_dialog).pack(side="left", padx=(0,6))
+        ctk.CTkButton(btn_frame, text="🔄 Poll All", height=30, width=100,
+                      corner_radius=8, font=ctk.CTkFont(size=11),
+                      command=self._poll_all_printers).pack(side="left", padx=(0,6))
+        ctk.CTkButton(btn_frame, text="⬇ Export CSV", height=30, width=110,
+                      corner_radius=8, font=ctk.CTkFont(size=11),
+                      fg_color="transparent", border_width=1,
+                      border_color=("#cccccc","#3a3a5e"),
+                      command=self._export_printer_report).pack(side="left")
+
+        # ── Left: Printer list ────────────────────────────────────────
+        list_card = ctk.CTkFrame(parent, corner_radius=12,
+                                  fg_color=("#ffffff","#1a1a2e"),
+                                  border_width=1, border_color=("#e0e0e0","#2e2e4e"))
+        list_card.grid(row=1, column=0, sticky="nsew", padx=(0,8))
+        list_card.grid_columnconfigure(0, weight=1)
+        list_card.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(list_card, text="Printers",
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color=("gray45","gray55")).grid(row=0, column=0, sticky="w", padx=14, pady=(10,4))
+
+        p_cols = ("id","name","ip_address","community","notes")
+        self._printer_list = ttk.Treeview(list_card, columns=p_cols, show="headings",
+                                           selectmode="browse", height=16)
+        p_widths = {"id":36,"name":160,"ip_address":120,"community":80,"notes":120}
+        for c in p_cols:
+            self._printer_list.heading(c, text=c.replace("_"," ").title())
+            self._printer_list.column(c, width=p_widths[c],
+                                       anchor="center" if c=="id" else "w")
+        vsb_p = ttk.Scrollbar(list_card, orient="vertical", command=self._printer_list.yview)
+        self._printer_list.configure(yscroll=vsb_p.set)
+        self._printer_list.grid(row=1, column=0, sticky="nsew", padx=(8,0), pady=(0,8))
+        vsb_p.grid(row=1, column=1, sticky="ns", pady=(0,8), padx=(0,4))
+
+        # Context menu
+        self._printer_ctx = tk.Menu(self._printer_list, tearoff=0)
+        self._printer_ctx.add_command(label="Poll this printer", command=self._poll_selected_printer)
+        self._printer_ctx.add_command(label="Edit",              command=self._edit_selected_printer)
+        self._printer_ctx.add_separator()
+        self._printer_ctx.add_command(label="Delete",            command=self._delete_selected_printer)
+        self._printer_list.bind("<Button-3>", lambda e: self._printer_ctx.post(e.x_root, e.y_root))
+
+        # Delete button strip
+        strip = ctk.CTkFrame(list_card, fg_color="transparent")
+        strip.grid(row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=(0,8))
+        ctk.CTkButton(strip, text="✎ Edit", height=26, width=70, corner_radius=6,
+                      font=ctk.CTkFont(size=10), fg_color="transparent",
+                      border_width=1, border_color=("#cccccc","#3a3a5e"),
+                      command=self._edit_selected_printer).pack(side="left", padx=(0,4))
+        ctk.CTkButton(strip, text="🗑 Delete", height=26, width=80, corner_radius=6,
+                      font=ctk.CTkFont(size=10),
+                      fg_color=("#FCE4EC","#4a1528"),
+                      hover_color=("#F8BBD9","#6b2040"),
+                      text_color=("#C62828","#F48FB1"),
+                      command=self._delete_selected_printer).pack(side="left")
+
+        # ── Right: Results table ──────────────────────────────────────
+        res_card = ctk.CTkFrame(parent, corner_radius=12,
+                                 fg_color=("#ffffff","#1a1a2e"),
+                                 border_width=1, border_color=("#e0e0e0","#2e2e4e"))
+        res_card.grid(row=1, column=1, sticky="nsew", padx=(8,0))
+        res_card.grid_columnconfigure(0, weight=1)
+        res_card.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(res_card, text="Latest Poll Results",
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color=("gray45","gray55")).grid(row=0, column=0, sticky="w", padx=14, pady=(10,4))
+
+        r_cols = ("name","ip_address","bw_count","color_count","total","polled_at","status")
+        self._results_tree = ttk.Treeview(res_card, columns=r_cols, show="headings",
+                                           selectmode="none", height=16)
+        r_widths = {"name":150,"ip_address":120,"bw_count":90,"color_count":90,
+                    "total":80,"polled_at":140,"status":80}
+        r_labels = {"name":"Printer Name","ip_address":"IP Address",
+                    "bw_count":"B&W","color_count":"Color","total":"Total",
+                    "polled_at":"Polled At","status":"Status"}
+        for c in r_cols:
+            self._results_tree.heading(c, text=r_labels[c])
+            self._results_tree.column(c, width=r_widths[c],
+                                       anchor="center" if c in ("bw_count","color_count","total","status") else "w")
+        self._results_tree.tag_configure("ok",      foreground="#2E7D32")
+        self._results_tree.tag_configure("error",   foreground="#C62828")
+        self._results_tree.tag_configure("timeout", foreground="#E65100")
+
+        vsb_r = ttk.Scrollbar(res_card, orient="vertical", command=self._results_tree.yview)
+        hsb_r = ttk.Scrollbar(res_card, orient="horizontal", command=self._results_tree.xview)
+        self._results_tree.configure(yscroll=vsb_r.set, xscroll=hsb_r.set)
+        self._results_tree.grid(row=1, column=0, sticky="nsew", padx=(8,0), pady=(0,0))
+        vsb_r.grid(row=1, column=1, sticky="ns", pady=(0,0), padx=(0,4))
+        hsb_r.grid(row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=(0,8))
+
+        # Load initial data
+        self._refresh_printer_list()
+        self._refresh_printer_results()
+
+    # ── Printer CRUD ─────────────────────────────────────────────────────────
+    def _open_add_printer_dialog(self, edit_id=None):
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Edit Printer" if edit_id else "Add Printer")
+        dlg.geometry("420x420")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        fields = {}
+
+        def row(label, default="", show=None):
+            ctk.CTkLabel(dlg, text=label, font=ctk.CTkFont(size=11),
+                         text_color=("gray45","gray55"), anchor="w").pack(fill="x", padx=24, pady=(10,2))
+            v = tk.StringVar(value=default)
+            kw = {"show": show} if show else {}
+            ctk.CTkEntry(dlg, textvariable=v, **kw).pack(fill="x", padx=24)
+            return v
+
+        existing = {}
+        if edit_id:
+            r = query_db("SELECT name,ip_address,community,bw_oid,color_oid,notes FROM printers WHERE id=?",
+                         (edit_id,), fetch=True)
+            if r:
+                existing = dict(zip(["name","ip_address","community","bw_oid","color_oid","notes"], r[0]))
+
+        fields["name"]        = row("Printer Name *", existing.get("name",""))
+        fields["ip_address"]  = row("IP Address *",   existing.get("ip_address",""))
+        fields["community"]   = row("SNMP Community", existing.get("community","public"))
+        fields["bw_oid"]      = row("B&W Counter OID",
+                                    existing.get("bw_oid","1.3.6.1.2.1.43.10.2.1.4.1.1"))
+        fields["color_oid"]   = row("Color Counter OID",
+                                    existing.get("color_oid","1.3.6.1.2.1.43.10.2.1.4.1.2"))
+        fields["notes"]       = row("Notes", existing.get("notes",""))
+
+        def save():
+            name = fields["name"].get().strip()
+            ip   = fields["ip_address"].get().strip()
+            if not name or not ip:
+                messagebox.showwarning("Required", "Name and IP Address are required.", parent=dlg)
+                return
+            comm    = fields["community"].get().strip() or "public"
+            bw_oid  = fields["bw_oid"].get().strip()
+            col_oid = fields["color_oid"].get().strip()
+            notes   = fields["notes"].get().strip()
+            if edit_id:
+                query_db("UPDATE printers SET name=?,ip_address=?,community=?,bw_oid=?,color_oid=?,notes=? WHERE id=?",
+                         (name, ip, comm, bw_oid, col_oid, notes, edit_id))
+            else:
+                query_db("INSERT INTO printers (name,ip_address,community,bw_oid,color_oid,notes) VALUES (?,?,?,?,?,?)",
+                         (name, ip, comm, bw_oid, col_oid, notes))
+            dlg.destroy()
+            self._refresh_printer_list()
+
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.pack(fill="x", padx=24, pady=(20,0))
+        ctk.CTkButton(btn_row, text="Save", command=save).pack(side="left")
+        ctk.CTkButton(btn_row, text="Cancel", fg_color="transparent",
+                      border_width=1, command=dlg.destroy).pack(side="left", padx=8)
+
+    def _edit_selected_printer(self):
+        sel = self._printer_list.selection()
+        if not sel: messagebox.showinfo("Select", "Select a printer first."); return
+        pid = self._printer_list.item(sel[0])["values"][0]
+        self._open_add_printer_dialog(edit_id=pid)
+
+    def _delete_selected_printer(self):
+        sel = self._printer_list.selection()
+        if not sel: return
+        vals = self._printer_list.item(sel[0])["values"]
+        if not messagebox.askyesno("Delete", f"Delete printer '{vals[1]}'?"): return
+        query_db("DELETE FROM printers WHERE id=?", (vals[0],))
+        query_db("DELETE FROM printer_polls WHERE printer_id=?", (vals[0],))
+        self._refresh_printer_list()
+        self._refresh_printer_results()
+
+    def _refresh_printer_list(self):
+        if not hasattr(self, "_printer_list"): return
+        for i in self._printer_list.get_children(): self._printer_list.delete(i)
+        for r in query_db("SELECT id,name,ip_address,community,notes FROM printers ORDER BY name", fetch=True):
+            self._printer_list.insert("", "end", values=r)
+
+    def _refresh_printer_results(self):
+        if not hasattr(self, "_results_tree"): return
+        for i in self._results_tree.get_children(): self._results_tree.delete(i)
+        rows = query_db("""
+            SELECT p.name, p.ip_address,
+                   pp.bw_count, pp.color_count,
+                   COALESCE(pp.bw_count,0)+COALESCE(pp.color_count,0),
+                   pp.polled_at, pp.status
+            FROM printers p
+            LEFT JOIN printer_polls pp ON pp.id = (
+                SELECT id FROM printer_polls
+                WHERE printer_id=p.id ORDER BY polled_at DESC LIMIT 1
+            )
+            ORDER BY p.name
+        """, fetch=True)
+        for r in rows:
+            status = r[6] or "—"
+            tag = "ok" if status == "ok" else ("timeout" if "timeout" in str(status).lower() else "error")
+            self._results_tree.insert("", "end", values=(
+                r[0], r[1],
+                r[2] if r[2] is not None else "—",
+                r[3] if r[3] is not None else "—",
+                r[4] if r[4] else "—",
+                r[5] or "never",
+                status
+            ), tags=(tag,))
+
+    # ── SNMP Polling ─────────────────────────────────────────────────────────
+    def _snmp_get(self, ip, community, oid, timeout=2, retries=1):
+        """Return (int value, None) or (None, error_string)."""
+        try:
+            errorIndication, errorStatus, errorIndex, varBinds = next(
+                getCmd(
+                    SnmpEngine(),
+                    CommunityData(community, mpModel=1),
+                    UdpTransportTarget((ip, 161), timeout=timeout, retries=retries),
+                    ContextData(),
+                    ObjectType(ObjectIdentity(oid))
+                )
+            )
+            if errorIndication:
+                return None, str(errorIndication)
+            if errorStatus:
+                return None, f"SNMP error: {errorStatus.prettyPrint()}"
+            val = varBinds[0][1]
+            return int(val), None
+        except Exception as e:
+            return None, str(e)
+
+    def _poll_printer(self, printer_row):
+        pid, name, ip, community, bw_oid, color_oid = printer_row
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        bw,    bw_err  = self._snmp_get(ip, community, bw_oid)
+        color, col_err = self._snmp_get(ip, community, color_oid)
+
+        if bw_err and col_err:
+            status = "timeout" if "timeout" in (bw_err + col_err).lower() else "error"
+        else:
+            status = "ok"
+
+        query_db("""INSERT INTO printer_polls (printer_id,polled_at,bw_count,color_count,status)
+                    VALUES (?,?,?,?,?)""", (pid, ts, bw, color, status))
+        return name, ip, bw, color, status, ts
+
+    def _poll_all_printers(self):
+        printers = query_db(
+            "SELECT id,name,ip_address,community,bw_oid,color_oid FROM printers ORDER BY name",
+            fetch=True)
+        if not printers:
+            messagebox.showinfo("No Printers", "Add some printers first.")
+            return
+        self._printer_status_var.set(f"Polling {len(printers)} printer(s)…")
+        self.update_idletasks()
+
+        def worker():
+            for p in printers:
+                self._poll_printer(p)
+            self.after(0, self._on_poll_done)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _poll_selected_printer(self):
+        sel = self._printer_list.selection()
+        if not sel: return
+        pid = self._printer_list.item(sel[0])["values"][0]
+        r = query_db("SELECT id,name,ip_address,community,bw_oid,color_oid FROM printers WHERE id=?",
+                     (pid,), fetch=True)
+        if not r: return
+        self._printer_status_var.set(f"Polling {r[0][1]}…")
+        self.update_idletasks()
+
+        def worker():
+            self._poll_printer(r[0])
+            self.after(0, self._on_poll_done)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_poll_done(self):
+        self._refresh_printer_results()
+        ts = datetime.now().strftime("%H:%M:%S")
+        self._printer_status_var.set(f"Last polled at {ts}")
+
+    # ── Export printer report ─────────────────────────────────────────────────
+    def _export_printer_report(self):
+        path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files","*.csv")],
+            initialfile=f"printer_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        if not path: return
+        rows = query_db("""
+            SELECT p.name, p.ip_address,
+                   pp.bw_count, pp.color_count,
+                   COALESCE(pp.bw_count,0)+COALESCE(pp.color_count,0),
+                   pp.polled_at, pp.status
+            FROM printers p
+            LEFT JOIN printer_polls pp ON pp.id = (
+                SELECT id FROM printer_polls
+                WHERE printer_id=p.id ORDER BY polled_at DESC LIMIT 1
+            )
+            ORDER BY p.name
+        """, fetch=True)
+        try:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["Printer Name","IP Address","B&W Count","Color Count","Total","Polled At","Status"])
+                w.writerows(rows)
+            messagebox.showinfo("Exported", f"Report saved to:\n{os.path.abspath(path)}")
+        except Exception as e:
+            messagebox.showerror("Export failed", str(e))
 
     # ── Reports ───────────────────────────────────────────────────────────
 
